@@ -19,6 +19,7 @@ import torch
 import tempfile
 import zipfile
 import shutil
+import subprocess
 from typing import Optional
 from cog import BasePredictor, Input, Path
 from safetensors.torch import load_file
@@ -33,13 +34,14 @@ from helpers.billing.metrics import record_billing_metric
 class Predictor(BasePredictor):
     def setup(self) -> None:
         """Load the model into memory to make running multiple predictions efficient"""
-        # Weights are pre-downloaded during build time via script/download-weights
-        # Model cache directory already exists from build time
+        # Download weights on first run if not present
         if not os.path.exists(MODEL_CACHE):
-            raise RuntimeError(
-                f"Model cache directory '{MODEL_CACHE}' not found. "
-                "Weights should have been downloaded during build time."
-            )
+            print(f"Model cache directory '{MODEL_CACHE}' not found. Downloading weights on first run...")
+            try:
+                subprocess.run([sys.executable, "download_weights.py"], check=True)
+                print("Weights downloaded successfully!")
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Failed to download model weights: {e}")
         
         # Initialize model
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"

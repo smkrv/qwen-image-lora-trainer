@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
 
+MODEL_CACHE = "model_cache"
+
 # H200 optimizations
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
@@ -183,6 +185,15 @@ def train(
     seed: int = Input(default=-1, description="Random seed for reproducible results (-1 for random)")
 ) -> TrainingOutput:
     """Train LoRA for Qwen Image - returns ZIP with lora.safetensors"""
+    
+    # Download weights on first run if not present
+    if not os.path.exists(MODEL_CACHE):
+        logger.info(f"Model cache directory '{MODEL_CACHE}' not found. Downloading weights on first run...")
+        try:
+            subprocess.run([sys.executable, "download_weights.py"], check=True)
+            logger.info("Weights downloaded successfully!")
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to download model weights: {e}")
     
     clean_up()
     job_name = f"qwen_lora_{int(time.time())}"
