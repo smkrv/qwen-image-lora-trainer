@@ -10,8 +10,7 @@ diffusers @ git+https://github.com/huggingface/diffusers@7ea065c5070a5278259e6f1
 accelerate>=0.20.0
 
 # Image processing - compatible versions (pydantic 1.x compatible)
-albumentations==1.4.15
-albucore==0.0.16
+albumentations==1.3.1
 opencv-python>=4.8.0
 opencv-python-headless>=4.9.0.80
 Pillow>=10.0.0
