@@ -2,16 +2,13 @@
 Billing metrics module for Cog predictors.
 
 This module provides functionality to record billing metrics for Replicate models.
-It validates metric types and values, and uses Cog's experimental metric recording API.
+It validates metric types and values, and uses Cog's metric recording API.
 """
 
 import warnings
 from typing import Union
 
-from cog import ExperimentalFeatureWarning, current_scope
-
-# Suppress experimental feature warnings for metric recording
-warnings.filterwarnings("ignore", category=ExperimentalFeatureWarning)
+from cog import current_scope
 
 # Metric definitions based on Replicate's billing system
 # Reference: https://github.com/replicate/web/blob/main/replicate_web/metronome.py#L48-L65
