@@ -13,7 +13,7 @@ build:
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/latest/download/pget_$(uname -s)_$(uname -m)"
     - chmod +x /usr/local/bin/pget
-    - python script/download-weights
+    - python download_weights.py
 
 predict: "predict.py:Predictor"
 train: "train.py:train"
