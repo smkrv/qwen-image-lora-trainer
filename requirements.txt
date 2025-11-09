@@ -1,18 +1,17 @@
 # Qwen Image LoRA Trainer - Fixed dependencies
 # This file pins compatible versions to avoid conflicts
 
-# Core dependencies with fixed versions
-pydantic>=2.0,<3.0
-pydantic-core>=2.0
+# Core dependencies with fixed versions (pydantic 1.x for Cog compatibility)
+pydantic>=1.10,<2.0
 torch>=2.0
 torchvision>=0.15
 transformers==4.52.4
 diffusers @ git+https://github.com/huggingface/diffusers@7ea065c5070a5278259e6f1effa9dccea232e62a
 accelerate>=0.20.0
 
-# Image processing - compatible versions
-albumentations>=1.4.18
-albucore>=0.0.16
+# Image processing - compatible versions (pydantic 1.x compatible)
+albumentations==1.4.15
+albucore==0.0.16
 opencv-python>=4.8.0
 opencv-python-headless>=4.9.0.80
 Pillow>=10.0.0
@@ -40,9 +39,9 @@ omegaconf>=2.3.0
 einops>=0.7.0
 
 # UI and server
-gradio>=5.0,<6.0
-fastapi>=0.100.0
-uvicorn>=0.23.0
+gradio
+fastapi
+uvicorn
 
 # Monitoring and metrics
 tensorboard>=2.14.0
