@@ -15,7 +15,7 @@ import logging
 # H200 optimizations
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
 os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
 os.environ["NCCL_ASYNC_ERROR_HANDLING"] = "1"
 
@@ -125,7 +125,7 @@ def run_training(config: Dict[str, Any], job_name: str) -> None:
     
     env = os.environ.copy()
     env.update({
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True,max_split_size_mb:512",
+        "PYTORCH_ALLOC_CONF": "expandable_segments:True,max_split_size_mb:512",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
         "NCCL_ASYNC_ERROR_HANDLING": "1"
     })
