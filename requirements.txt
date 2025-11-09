@@ -1,0 +1,71 @@
+# Qwen Image LoRA Trainer - Fixed dependencies
+# This file pins compatible versions to avoid conflicts
+
+# Core dependencies with fixed versions (pydantic 1.x for Cog compatibility)
+pydantic>=1.10,<2.0
+torch>=2.0
+torchvision>=0.15
+transformers==4.52.4
+diffusers @ git+https://github.com/huggingface/diffusers@7ea065c5070a5278259e6f1effa9dccea232e62a
+accelerate>=0.20.0
+
+# Image processing - compatible versions (pydantic 1.x compatible)
+albumentations==1.3.1
+opencv-python>=4.8.0
+opencv-python-headless>=4.9.0.80
+Pillow>=10.0.0
+kornia>=0.7.0
+kornia_rs>=0.1.9
+invisible-watermark>=0.2.0
+
+# LoRA and training
+lycoris-lora==1.8.3
+peft>=0.10.0
+optimum-quanto==0.2.4
+torchao==0.10.0
+easy_dwpose @ git+https://github.com/jaretburkett/easy_dwpose.git
+bitsandbytes>=0.41.0
+
+# Utilities
+safetensors>=0.4.0
+huggingface_hub>=0.20.0
+hf_transfer>=0.1.0
+flatten_json
+pyyaml
+oyaml
+toml
+omegaconf>=2.3.0
+einops>=0.7.0
+
+# UI and server
+gradio
+fastapi
+uvicorn
+
+# Monitoring and metrics
+tensorboard>=2.14.0
+wandb>=0.15.0
+
+# Optimization
+sentencepiece>=0.1.99
+python-dotenv>=1.0.0
+python-slugify>=8.0.0
+
+# Model architectures
+timm>=0.9.0
+open_clip_torch>=2.20.0
+k-diffusion>=0.1.0
+controlnet_aux==0.0.10
+
+# Image metrics
+lpips>=0.1.4
+pytorch_fid>=0.3.0
+pytorch-wavelets==1.3.0
+
+# Scientific computing
+numpy>=1.24.0,<2.0
+scipy>=1.10.0
+matplotlib==3.10.1
+
+# Build tools
+setuptools==69.5.1

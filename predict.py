@@ -204,16 +204,16 @@ class Predictor(BasePredictor):
             description="Image size preset (quality = larger, speed = faster). Ignored if width and height are both provided."
         ),
         width: int = Input(
-            default=None,
-            ge=512,
+            default=0,
+            ge=0,
             le=2048,
-            description="Custom width in pixels. Provide both width and height for custom dimensions (overrides aspect_ratio/image_size)."
+            description="Custom width in pixels. Provide both width and height for custom dimensions (overrides aspect_ratio/image_size). 0 to use presets."
         ),
         height: int = Input(
-            default=None,
-            ge=512,
+            default=0,
+            ge=0,
             le=2048,
-            description="Custom height in pixels. Provide both width and height for custom dimensions (overrides aspect_ratio/image_size)."
+            description="Custom height in pixels. Provide both width and height for custom dimensions (overrides aspect_ratio/image_size). 0 to use presets."
         ),
         go_fast: bool = Input(
             default=False,
@@ -232,8 +232,8 @@ class Predictor(BasePredictor):
             description="Guidance scale for image generation. Defaults to 1 if go_fast, else 3.5."
         ),
         seed: int = Input(
-            default=None,
-            description="Set a seed for reproducibility. Random by default."
+            default=-1,
+            description="Set a seed for reproducibility (-1 for random)."
         ),
         output_format: str = Input(
             default="webp",
@@ -246,7 +246,7 @@ class Predictor(BasePredictor):
             le=100,
             description="Quality when saving images (0-100, higher is better, 100 = lossless)"
         ),
-        replicate_weights: Optional[Path] = Input(
+        replicate_weights: Path = Input(
             default=None,
             description="Path to LoRA weights file. Leave blank to use base model."
         ),
@@ -259,7 +259,7 @@ class Predictor(BasePredictor):
     ) -> Path:
         """Run a single prediction on the model"""
         # Determine dimensions with smart handling
-        if width is not None and height is not None:
+        if width > 0 and height > 0:
             # User provided explicit dimensions - validate and adjust if needed
             orig_w, orig_h = width, height
             
@@ -276,7 +276,7 @@ class Predictor(BasePredictor):
             else:
                 print(f"📐 Using custom dimensions: {width}x{height}")
         
-        elif width is not None or height is not None:
+        elif width > 0 or height > 0:
             # Only one dimension provided - error
             raise ValueError(
                 "Both width and height must be provided together for custom dimensions. "
@@ -303,7 +303,7 @@ class Predictor(BasePredictor):
             self.lora_net._update_torch_multiplier()
         
         # Set seed
-        if seed is None:
+        if seed == -1:
             seed = torch.randint(0, 2**32 - 1, (1,)).item()
             print(f"Using random seed: {seed}")
         else:
