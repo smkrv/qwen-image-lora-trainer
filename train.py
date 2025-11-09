@@ -104,7 +104,7 @@ def create_training_config(job_name: str, steps: int, learning_rate: float, lora
                     "batch_size": batch_size, "steps": steps, "gradient_accumulation_steps": 2,
                     "train_unet": True, "train_text_encoder": False, "gradient_checkpointing": False,
                     "noise_scheduler": "flowmatch", "optimizer": optimizer, "lr": learning_rate,
-                    "dtype": "bf16", "max_grad_norm": 1.0, "seed": seed or 42,
+                    "dtype": "bf16", "max_grad_norm": 1.0, "seed": seed if seed != -1 else 42,
                     "ema_config": {"use_ema": False, "ema_decay": 0.99}
                 },
                 "model": {"name_or_path": "Qwen/Qwen-Image", "arch": "qwen_image", "quantize": False, "quantize_te": False, "low_vram": False},
@@ -180,7 +180,7 @@ def train(
     default_caption: str = Input(default="A photo of a person named <>", description="Caption for images without matching .txt files. CRITICAL: Qwen is extremely sensitive to prompting and differs from other image models. Do NOT use abstract tokens like 'TOK', 'sks', or meaningless identifiers. Instead, use descriptive, familiar words that closely match your actual images (e.g., 'person', 'man', 'woman', 'dog', 'cat', 'building', 'car'). Every token carries meaning - the model learns by overriding specific descriptive concepts rather than learning new tokens. Be precise and descriptive about what's actually in your images. The model excels at composition and will follow detailed instructions exactly."),
     batch_size: int = Input(default=1, description="Batch size", choices=[1, 2, 4]),
     optimizer: str = Input(default="adamw", description="Optimizer", choices=["adamw8bit", "adamw", "adam8bit", "prodigy"]),
-    seed: Optional[int] = Input(default=None, description="Random seed for reproducible results (leave blank for random)")
+    seed: int = Input(default=-1, description="Random seed for reproducible results (-1 for random)")
 ) -> TrainingOutput:
     """Train LoRA for Qwen Image - returns ZIP with lora.safetensors"""
     
@@ -201,7 +201,7 @@ def train(
         "lora_alpha": lora_rank,
         "batch_size": batch_size,
         "optimizer": optimizer,
-        "seed": seed if seed is not None else "random",
+        "seed": seed if seed != -1 else "random",
         "resolution": "[512, 768, 1024]",
         "default_caption": default_caption,
         "images": dataset_stats["total_images"],
