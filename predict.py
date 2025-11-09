@@ -246,7 +246,7 @@ class Predictor(BasePredictor):
             le=100,
             description="Quality when saving images (0-100, higher is better, 100 = lossless)"
         ),
-        replicate_weights: Optional[Path] = Input(
+        replicate_weights: Path = Input(
             default=None,
             description="Path to LoRA weights file. Leave blank to use base model."
         ),
