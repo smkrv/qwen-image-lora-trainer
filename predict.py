@@ -3,11 +3,9 @@
 
 import os
 from pathlib import Path
-import subprocess
 import time
 
 MODEL_CACHE = "model_cache"
-BASE_URL = "https://weights.replicate.delivery/default/qwen-image-lora/model_cache/"
 
 # Set environment variables for model caching BEFORE any imports
 os.environ["HF_HOME"] = MODEL_CACHE
@@ -32,53 +30,23 @@ from toolkit.config_modules import ModelConfig
 from helpers.billing.metrics import record_billing_metric
 
 
-def download_weights(url: str, dest: str) -> None:
-    """Download weights from CDN using pget"""
-    start = time.time()
-    print("[!] Initiating download from URL: ", url)
-    print("[~] Destination path: ", dest)
-    if ".tar" in dest:
-        dest = os.path.dirname(dest)
-    command = ["pget", "-vf" + ("x" if ".tar" in url else ""), url, dest]
-    try:
-        print(f"[~] Running command: {' '.join(command)}")
-        subprocess.check_call(command, close_fds=False)
-    except subprocess.CalledProcessError as e:
-        print(
-            f"[ERROR] Failed to download weights. Command '{' '.join(e.cmd)}' returned non-zero exit status {e.returncode}."
-        )
-        raise
-    print("[+] Download completed in: ", time.time() - start, "seconds")
-
-
 class Predictor(BasePredictor):
     def setup(self) -> None:
         """Load the model into memory to make running multiple predictions efficient"""
-        # Create model cache directory if it doesn't exist
-        os.makedirs(MODEL_CACHE, exist_ok=True)
-
-        # Download model weights if not already present
-        model_files = [
-            "models--Qwen--Qwen-Image.tar",
-            "xet.tar",
-        ]
-
-        for model_file in model_files:
-            url = BASE_URL + model_file
-            filename = url.split("/")[-1]
-            dest_path = os.path.join(MODEL_CACHE, filename)
-            # Check if the extracted directory exists (without .tar extension)
-            extracted_name = filename.replace(".tar", "")
-            extracted_path = os.path.join(MODEL_CACHE, extracted_name)
-            if not os.path.exists(extracted_path):
-                download_weights(url, dest_path)
+        # Weights are pre-downloaded during build time via script/download-weights
+        # Model cache directory already exists from build time
+        if not os.path.exists(MODEL_CACHE):
+            raise RuntimeError(
+                f"Model cache directory '{MODEL_CACHE}' not found. "
+                "Weights should have been downloaded during build time."
+            )
         
         # Initialize model
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.torch_dtype = torch.bfloat16
         self.lora_net = None
         
-        print("Loading Qwen Image model...")
+        print("Loading Qwen Image model from pre-downloaded weights...")
         model_cfg = ModelConfig(name_or_path="Qwen/Qwen-Image", arch="qwen_image", dtype="bf16")
         self.qwen = QwenImageModel(device=self.device, model_config=model_cfg, dtype=self.torch_dtype)
         self.qwen.load_model()
