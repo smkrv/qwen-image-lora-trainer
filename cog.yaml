@@ -14,5 +14,5 @@ build:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/latest/download/pget_$(uname -s)_$(uname -m)"
     - chmod +x /usr/local/bin/pget
 
-predict: "predict.py:Predictor"
+# predict: "predict.py:Predictor"  # Commented out to hide Playground tab, but predict.py remains for destination models
 train: "train.py:train"
