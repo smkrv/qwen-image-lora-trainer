@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qwen Image predictor with LoRA support"""
+"""Qwen Image predictor with optimized LoRA support and caching"""
 
 import os
 from pathlib import Path
@@ -18,17 +18,40 @@ import sys
 import torch
 import tempfile
 import zipfile
+import tarfile
+import gzip
 import shutil
 import subprocess
-from typing import Optional
-from cog import BasePredictor, Input, Path
-from safetensors.torch import load_file
+import hashlib
+from typing import Optional, List
+from cog import BasePredictor, Input, Path as CogPath
+from diffusers import DiffusionPipeline
+from pathlib import Path as PathlibPath
 
-sys.path.insert(0, "./ai-toolkit")
-from extensions_built_in.diffusion_models.qwen_image import QwenImageModel
-from toolkit.lora_special import LoRASpecialNetwork
-from toolkit.config_modules import ModelConfig
 from helpers.billing.metrics import record_billing_metric
+
+
+# Aspect ratio configurations
+ASPECT_RATIOS = {
+    "1:1": (1328, 1328),
+    "16:9": (1664, 928),
+    "9:16": (928, 1664),
+    "4:3": (1472, 1136),
+    "3:4": (1136, 1472),
+    "3:2": (1536, 1024),
+    "2:3": (1024, 1536),
+}
+
+# Speed dimensions for optimize_for_speed mode
+SPEED_DIMENSIONS = {
+    "1:1": (1024, 1024),
+    "16:9": (1024, 576),
+    "9:16": (576, 1280),
+    "4:3": (1024, 768),
+    "3:4": (768, 1024),
+    "3:2": (1152, 768),
+    "2:3": (768, 1152),
+}
 
 
 class Predictor(BasePredictor):
@@ -43,112 +66,196 @@ class Predictor(BasePredictor):
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(f"Failed to download model weights: {e}")
         
-        # Initialize model
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.torch_dtype = torch.bfloat16
-        self.lora_net = None
-        
         print("Loading Qwen Image model from pre-downloaded weights...")
-        model_cfg = ModelConfig(name_or_path="Qwen/Qwen-Image", arch="qwen_image", dtype="bf16")
-        self.qwen = QwenImageModel(device=self.device, model_config=model_cfg, dtype=self.torch_dtype)
-        self.qwen.load_model()
-        self.pipe = self.qwen.get_generation_pipeline()
-        print("Model loaded successfully!")
-
-    def _load_lora_weights(self, lora_path: str, lora_scale: float) -> None:
-        # Extract from ZIP if needed
-        if lora_path.endswith('.zip'):
-            temp_dir = tempfile.mkdtemp()
-            with zipfile.ZipFile(lora_path, 'r') as zipf:
-                lora_files = [f for f in zipf.namelist() if f.endswith('.safetensors')]
-                zipf.extract(lora_files[0], temp_dir)
-                safetensors_path = os.path.join(temp_dir, lora_files[0])
+        start_time = time.time()
+        
+        # Load using optimized DiffusionPipeline
+        self.pipe = DiffusionPipeline.from_pretrained(
+            "Qwen/Qwen-Image",
+            dtype=torch.bfloat16,
+        )
+        self.pipe.to("cuda")
+        
+        print(f"Model loaded in {time.time() - start_time:.2f}s")
+        print("Model ready for inference!")
+        
+        # Initialize LoRA cache for maximum performance
+        self.loaded_loras = {}
+    
+    def _get_lora_hash(self, lora_url: str) -> str:
+        """Generate unique hash for LoRA URL"""
+        return hashlib.md5(lora_url.encode()).hexdigest()[:12]
+    
+    def _detect_archive_type(self, url: str) -> Optional[str]:
+        """Detect archive type from URL
+        
+        Returns:
+            str: Archive type ('zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz', 'gz') or None for direct file
+        """
+        url_lower = url.lower()
+        
+        if url_lower.endswith('.zip'):
+            return 'zip'
+        elif url_lower.endswith(('.tar.gz', '.tgz')):
+            return 'tar.gz'
+        elif url_lower.endswith(('.tar.bz2', '.tbz2')):
+            return 'tar.bz2'
+        elif url_lower.endswith(('.tar.xz', '.txz')):
+            return 'tar.xz'
+        elif url_lower.endswith('.tar'):
+            return 'tar'
+        elif url_lower.endswith('.gz') and not url_lower.endswith('.tar.gz'):
+            return 'gz'
+        elif url_lower.endswith('.safetensors'):
+            return None  # Direct safetensors file
         else:
-            safetensors_path = lora_path
-            temp_dir = None
+            return None  # Unknown format, treat as direct file
+    
+    def _extract_archive(self, archive_path: str, extract_dir: str, archive_type: str) -> None:
+        """Extract archive based on type
         
-        # Load LoRA config and weights
-        try:
-            weights = load_file(safetensors_path)
-            sample_key = next(k for k in weights.keys() if ("lora_A" in k or "lora_down" in k))
-            lora_dim = weights[sample_key].shape[0]
-            alpha_key = sample_key.replace("lora_down", "alpha").replace("lora_A", "alpha")
-            lora_alpha = int(weights[alpha_key].item()) if alpha_key in weights else lora_dim
-        except:
-            weights = safetensors_path  # Fallback to path-based loading
-            lora_dim, lora_alpha = 32, 32
+        Args:
+            archive_path: Path to the archive file
+            extract_dir: Directory to extract to
+            archive_type: Type of archive ('zip', 'tar', 'tar.gz', etc.)
+        """
+        os.makedirs(extract_dir, exist_ok=True)
         
-        # Create LoRA network if needed
-        if (self.lora_net is None or 
-            getattr(self.lora_net, 'lora_dim', None) != lora_dim or 
-            getattr(self.lora_net, 'alpha', None) != lora_alpha):
-            self.lora_net = LoRASpecialNetwork(
-                text_encoder=self.qwen.text_encoder, unet=self.qwen.unet,
-                lora_dim=lora_dim, alpha=lora_alpha, multiplier=lora_scale,
-                train_unet=True, train_text_encoder=False, is_transformer=True,
-                transformer_only=True, base_model=self.qwen,
-                target_lin_modules=["QwenImageTransformer2DModel"]
-            )
-            self.lora_net.apply_to(self.qwen.text_encoder, self.qwen.unet, 
-                                 apply_text_encoder=False, apply_unet=True)
-            self.lora_net.force_to(self.qwen.device_torch, dtype=self.qwen.torch_dtype)
+        if archive_type == 'zip':
+            with zipfile.ZipFile(archive_path, 'r') as archive:
+                archive.extractall(extract_dir)
         
-        # Load and activate
-        self.lora_net.load_weights(weights)
-        self.lora_net.is_active = True
-        self.lora_net.multiplier = lora_scale
-        self.lora_net._update_torch_multiplier()
+        elif archive_type in ('tar', 'tar.gz', 'tar.bz2', 'tar.xz'):
+            # tarfile automatically handles compression detection with 'r:*' mode
+            with tarfile.open(archive_path, 'r:*') as archive:
+                archive.extractall(extract_dir)
         
-        # Cleanup
-        if temp_dir:
-            shutil.rmtree(temp_dir)
+        elif archive_type == 'gz':
+            # Single gzip file - extract directly
+            output_path = os.path.join(extract_dir, 'extracted.safetensors')
+            with gzip.open(archive_path, 'rb') as f_in:
+                with open(output_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
         
-        print(f"LoRA loaded: dim={lora_dim}, alpha={lora_alpha}, scale={lora_scale}")
+        else:
+            raise ValueError(f"Unsupported archive type: {archive_type}")
+    
+    def _load_lora_weights(self, lora_path: str, adapter_name: str, lora_scale: float) -> Optional[str]:
+        """Load LoRA weights with intelligent caching
+        
+        Returns:
+            str: Unique adapter name for this LoRA, or None if no LoRA provided
+        """
+        if not lora_path:
+            return None
+        
+        # Generate unique adapter name based on URL/path hash
+        url_hash = self._get_lora_hash(lora_path)
+        unique_adapter_name = f"{adapter_name}_{url_hash}"
+        
+        # Check if already loaded in pipe - maximum performance optimization
+        if unique_adapter_name in self.loaded_loras:
+            cached = self.loaded_loras[unique_adapter_name]
+            print(f"✓ LoRA {adapter_name} (hash: {url_hash}) already loaded in pipe")
+            print(f"  Cached at: {cached['path']}")
+            # Return immediately without reloading for maximum performance
+            return unique_adapter_name
+        
+        print(f"Loading LoRA {adapter_name} from {lora_path}")
+        print(f"Using unique identifier: {url_hash}")
+        
+        # Download if URL, otherwise use local path
+        if lora_path.startswith(("http://", "https://")):
+            import requests
+            
+            # Detect archive type
+            archive_type = self._detect_archive_type(lora_path)
+            
+            if archive_type:
+                # Handle archive files
+                ext_map = {
+                    'zip': '.zip',
+                    'tar': '.tar',
+                    'tar.gz': '.tar.gz',
+                    'tar.bz2': '.tar.bz2',
+                    'tar.xz': '.tar.xz',
+                    'gz': '.gz'
+                }
+                ext = ext_map.get(archive_type, '.archive')
+                
+                archive_path = f"/tmp/lora_{url_hash}{ext}"
+                extract_dir = f"/tmp/lora_{url_hash}_extracted"
+                
+                # Check if already downloaded and extracted
+                if not os.path.exists(extract_dir):
+                    print(f"Downloading and extracting {archive_type.upper()} archive...")
+                    # Download archive
+                    response = requests.get(lora_path)
+                    with open(archive_path, "wb") as f:
+                        f.write(response.content)
+                    
+                    # Extract archive
+                    self._extract_archive(archive_path, extract_dir, archive_type)
+                    
+                    # Clean up archive file after extraction
+                    os.remove(archive_path)
+                    print(f"{archive_type.upper()} archive extracted to {extract_dir}")
+                else:
+                    print(f"Using cached extracted files from {extract_dir}")
+                
+                # Find .safetensors file
+                safetensors_files = list(PathlibPath(extract_dir).rglob("*.safetensors"))
+                if not safetensors_files:
+                    raise ValueError(f"No .safetensors file found in {lora_path}")
+                
+                final_lora_path = str(safetensors_files[0])
+                print(f"Using safetensors file: {os.path.basename(final_lora_path)}")
+            else:
+                # Direct download for safetensors with unique name
+                final_lora_path = f"/tmp/lora_{url_hash}.safetensors"
+                
+                # Download only if not exists
+                if not os.path.exists(final_lora_path):
+                    print(f"Downloading safetensors file...")
+                    response = requests.get(lora_path)
+                    with open(final_lora_path, "wb") as f:
+                        f.write(response.content)
+                else:
+                    print(f"Using cached file: {final_lora_path}")
+        else:
+            final_lora_path = lora_path
+        
+        # Load LoRA with unique adapter name using optimized diffusers API
+        self.pipe.load_lora_weights(final_lora_path, adapter_name=unique_adapter_name)
+        self.loaded_loras[unique_adapter_name] = {
+            'url': lora_path,
+            'path': final_lora_path
+        }
+        print(f"✓ LoRA {adapter_name} loaded successfully as {unique_adapter_name}")
+        print(f"  Cached at: {final_lora_path}")
+        
+        return unique_adapter_name
 
     def _get_dimensions(self, aspect_ratio: str, image_size: str) -> tuple:
-        """Get dimensions based on aspect ratio and image size preset, matching Pruna's approach"""
-        
-        # Pruna-style dimensions for optimize_for_quality (~1.5-1.7 MP)
-        quality_dims = {
-            "1:1": (1328, 1328),
-            "16:9": (1664, 928),
-            "9:16": (928, 1664),
-            "4:3": (1472, 1136),
-            "3:4": (1136, 1472),
-            "3:2": (1536, 1024),
-            "2:3": (1024, 1536),
-        }
-        
-        # Speed dimensions (actual Pruna dimensions from testing)
-        speed_dims = {
-            "1:1": (1024, 1024),
-            "16:9": (1024, 576),
-            "9:16": (576, 1280),  # Note: 576x1280, not 576x1024
-            "4:3": (1024, 768),
-            "3:4": (768, 1024),
-            "3:2": (1152, 768),
-            "2:3": (768, 1152),
-        }
+        """Get dimensions based on aspect ratio and image size preset"""
         
         if image_size == "optimize_for_quality":
-            dims = quality_dims
+            dims = ASPECT_RATIOS
         else:  # optimize_for_speed
-            dims = speed_dims
+            dims = SPEED_DIMENSIONS
         
         width, height = dims.get(aspect_ratio, (1328, 1328))
         
-        # Our dimensions are already divisible by 16, but let's keep this for safety
-        # in case someone modifies the dimensions above
+        # Ensure divisible by 16
         adjusted_width = (width // 16) * 16
         adjusted_height = (height // 16) * 16
         
-        # Log if adjustment was needed (shouldn't happen with our current dimensions)
+        # Log if adjustment was needed (shouldn't happen with our presets)
         if adjusted_width != width or adjusted_height != height:
             print(f"`height` and `width` have to be divisible by 16 but are {width} and {height}.")
             print(f"Dimensions will be resized to {adjusted_width}x{adjusted_height}")
         
         return adjusted_width, adjusted_height
-
 
     def predict(
         self,
@@ -191,15 +298,15 @@ class Predictor(BasePredictor):
         ),
         num_inference_steps: int = Input(
             default=50,
-            ge=0.0,
-            le=50,
-            description="Number of denoising steps. More steps = higher quality. Defaults to 4 if go_fast, else 28."
+            ge=1,
+            le=100,
+            description="Number of denoising steps. More steps = higher quality."
         ),
         guidance: float = Input(
             default=4.0,
             ge=0.0,
             le=10,
-            description="Guidance scale for image generation. Defaults to 1 if go_fast, else 3.5."
+            description="Guidance scale for image generation (true_cfg_scale)."
         ),
         seed: int = Input(
             default=-1,
@@ -216,7 +323,7 @@ class Predictor(BasePredictor):
             le=100,
             description="Quality when saving images (0-100, higher is better, 100 = lossless)"
         ),
-        replicate_weights: Path = Input(
+        replicate_weights: CogPath = Input(
             default=None,
             description="Path to LoRA weights file. Leave blank to use base model."
         ),
@@ -225,8 +332,18 @@ class Predictor(BasePredictor):
             ge=0,
             le=3,
             description="Scale for LoRA weights (0 = base model, 1 = full LoRA)"
+        ),
+        extra_lora_weights: CogPath = Input(
+            default=None,
+            description="Path to additional LoRA weights file (for combining multiple LoRAs)."
+        ),
+        extra_lora_scale: float = Input(
+            default=1.0,
+            ge=0,
+            le=3,
+            description="Scale for extra LoRA weights"
         )
-    ) -> Path:
+    ) -> CogPath:
         """Run a single prediction on the model"""
         # Determine dimensions with smart handling
         if width > 0 and height > 0:
@@ -259,56 +376,89 @@ class Predictor(BasePredictor):
             mode_name = "quality" if image_size == "optimize_for_quality" else "speed"
             print(f"📐 Using {mode_name} preset for {aspect_ratio}: {width}x{height}")
 
-        # Override steps for go_fast mode
+        # Override steps for go_fast mode (not used with Qwen, but kept for API compatibility)
         if go_fast and num_inference_steps > 28:
             num_inference_steps = 28
         
-        # guidance is already set via default parameter
+        # Load LoRA weights with intelligent caching
+        adapters = []
+        adapter_weights = []
         
-        # Load LoRA if provided
         if replicate_weights:
-            self._load_lora_weights(str(replicate_weights), lora_scale)
-        elif self.lora_net:
-            self.lora_net.is_active = False
-            self.lora_net._update_torch_multiplier()
+            unique_name = self._load_lora_weights(str(replicate_weights), "main_lora", lora_scale)
+            if unique_name:
+                adapters.append(unique_name)
+                adapter_weights.append(lora_scale)
+        
+        if extra_lora_weights:
+            unique_name = self._load_lora_weights(str(extra_lora_weights), "extra_lora", extra_lora_scale)
+            if unique_name:
+                adapters.append(unique_name)
+                adapter_weights.append(extra_lora_scale)
+        
+        # Set adapters if LoRAs are loaded
+        if adapters:
+            self.pipe.set_adapters(adapters, adapter_weights=adapter_weights)
+            print(f"Using LoRAs: {adapters} with weights {adapter_weights}")
         
         # Set seed
         if seed == -1:
-            seed = torch.randint(0, 2**32 - 1, (1,)).item()
+            seed = int.from_bytes(os.urandom(4), "big")
             print(f"Using random seed: {seed}")
         else:
             print(f"Using seed: {seed}")
+        
+        generator = torch.Generator(device="cuda").manual_seed(seed)
         
         # Enhance prompt if requested
         if enhance_prompt:
             prompt = f"{prompt}, highly detailed, crisp focus, studio lighting, photorealistic"
         
+        # Add quality magic prompt suffix
+        positive_magic = ", Ultra HD, 4K, cinematic composition."
+        full_prompt = prompt + positive_magic
+        
+        # Prepare negative prompt
+        if not negative_prompt.strip():
+            negative_prompt = " "
+        
         # Generate
         print(f"Generating: {prompt} ({width}x{height}, steps={num_inference_steps}, seed={seed})")
         
-        import time
         prediction_start = time.time()
         
-        gen_cfg = type("Gen", (), {
-            "width": width, "height": height, "guidance_scale": guidance,
-            "num_inference_steps": num_inference_steps, "latents": None, "ctrl_img": None
-        })()
-        
-        generator = torch.Generator(device=self.qwen.device_torch).manual_seed(seed)
-        cond = self.qwen.get_prompt_embeds(prompt)
-        uncond = self.qwen.get_prompt_embeds(negative_prompt if negative_prompt.strip() else "")
-        
-        img = self.qwen.generate_single_image(self.pipe, gen_cfg, cond, uncond, generator, extra={})
+        # Optimized generation using native diffusers pipeline
+        output = self.pipe(
+            prompt=full_prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            true_cfg_scale=guidance,
+            num_images_per_prompt=1,
+            generator=generator,
+        )
         
         prediction_end = time.time()
         prediction_time = prediction_end - prediction_start
         
+        # Get the generated image
+        img = output.images[0]
+        
         # Save
         output_path = f"/tmp/output.{output_format}"
         save_kwargs = {"quality": output_quality} if output_format in ("jpg", "webp") else {}
+        
         if output_format == "jpg":
+            # Convert RGBA to RGB if necessary
+            if img.mode == "RGBA":
+                img = img.convert("RGB")
             save_kwargs["optimize"] = True
-        img.save(output_path, **save_kwargs)
+            img.save(output_path, format="JPEG", **save_kwargs)
+        elif output_format == "webp":
+            img.save(output_path, format="WEBP", **save_kwargs)
+        else:  # png
+            img.save(output_path, format="PNG")
         
         # Record billing metric after successful image generation
         record_billing_metric("image_output_count", 1)
@@ -316,4 +466,6 @@ class Predictor(BasePredictor):
         print(f"Generation took {prediction_time:.2f} seconds")
         print(f"Total safe images: 1/1")
         
-        return Path(output_path)
+        # Keep LoRAs loaded in pipe for maximum performance on subsequent requests
+        
+        return CogPath(output_path)
