@@ -8,7 +8,21 @@ It validates metric types and values, and uses Cog's metric recording API.
 import warnings
 from typing import Union
 
-from cog import current_scope
+# Try to import current_scope, fallback for older Cog versions
+try:
+    from cog import current_scope
+    CURRENT_SCOPE_AVAILABLE = True
+except ImportError:
+    CURRENT_SCOPE_AVAILABLE = False
+    # Dummy scope for backward compatibility with older Cog versions
+    class DummyScope:
+        def record_metric(self, name, value):
+            """No-op implementation for older Cog versions without metrics API"""
+            pass
+    
+    def current_scope():
+        """Fallback function that returns a dummy scope"""
+        return DummyScope()
 
 # Metric definitions based on Replicate's billing system
 # Reference: https://github.com/replicate/web/blob/main/replicate_web/metronome.py#L48-L65
@@ -119,6 +133,9 @@ def record_billing_metric(metric_name: str, value: Union[float, int, str, bool])
     # Record the metric using Cog's API
     try:
         current_scope().record_metric(metric_name, value)
+        # Log when metrics API is not available (for debugging)
+        if not CURRENT_SCOPE_AVAILABLE:
+            print(f"Info: Billing metric {metric_name}={value} (metrics API unavailable in this Cog version)")
     except Exception as e:
         # Log the error but don't fail the prediction
         # This ensures billing metrics don't break the main functionality
