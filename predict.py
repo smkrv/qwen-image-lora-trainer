@@ -226,7 +226,19 @@ class Predictor(BasePredictor):
             final_lora_path = lora_path
         
         # Load LoRA with unique adapter name using optimized diffusers API
-        self.pipe.load_lora_weights(final_lora_path, adapter_name=unique_adapter_name)
+        # QwenImagePipeline requires weight_name parameter
+        if os.path.isdir(final_lora_path):
+            # For directories (like extracted archives), find the safetensors file
+            safetensors_files = list(PathlibPath(final_lora_path).rglob("*.safetensors"))
+            if safetensors_files:
+                weight_file_name = os.path.basename(str(safetensors_files[0]))
+                self.pipe.load_lora_weights(final_lora_path, adapter_name=unique_adapter_name, weight_name=weight_file_name)
+        else:
+            # For direct files, split into directory and filename
+            lora_dir = os.path.dirname(final_lora_path) or "."
+            weight_file_name = os.path.basename(final_lora_path)
+            self.pipe.load_lora_weights(lora_dir, adapter_name=unique_adapter_name, weight_name=weight_file_name)
+        
         self.loaded_loras[unique_adapter_name] = {
             'url': lora_path,
             'path': final_lora_path
